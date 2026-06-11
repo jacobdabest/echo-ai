@@ -143,12 +143,11 @@ RESPONSE PROTOCOLS:
 
 INITIALIZATION COMPLETE. ECHO AWAITING INPUT.`;
 
-    // Call Claude API via the service role key's built-in access or ANTHROPIC_API_KEY env var
-    const apiKey = Deno.env.get("ANTHROPIC_API_KEY");
+    const apiKey = Deno.env.get("NVIDIA_API_KEY");
     if (!apiKey) {
       return new Response(
         JSON.stringify({
-          reply: "ECHO operating in local mode. No Claude API key configured. Set the ANTHROPIC_API_KEY secret to enable full AI capabilities.",
+          reply: "ECHO operating in local mode. No NVIDIA API key configured. Set the NVIDIA_API_KEY secret to enable full AI capabilities.",
           agent_commands: [],
           voice_text: null,
           memory_updates: [],
@@ -157,31 +156,44 @@ INITIALIZATION COMPLETE. ECHO AWAITING INPUT.`;
       );
     }
 
-    const claudeResponse = await fetch("https://api.anthropic.com/v1/messages", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "x-api-key": apiKey,
-        "anthropic-version": "2023-06-01",
-      },
-      body: JSON.stringify({
-        model: "claude-sonnet-4-20250514",
-        max_tokens: 2500,
-        system: systemPrompt,
-        messages: history.slice(-40),
-      }),
-    });
+    // Build OpenAI-compatible messages array for NVIDIA NIM
+    const nvidiaMessages = [
+      { role: "system", content: systemPrompt },
+      ...history.slice(-40).map((m: { role: string; content: string }) => ({
+        role: m.role === "user" ? "user" : "assistant",
+        content: m.content,
+      })),
+    ];
 
-    if (!claudeResponse.ok) {
-      const errText = await claudeResponse.text();
+    // Call NVIDIA NIM API (OpenAI-compatible endpoint)
+    const nvidiaResponse = await fetch(
+      "https://integrate.api.nvidia.com/v1/chat/completions",
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${apiKey}`,
+        },
+        body: JSON.stringify({
+          model: "nvidia/llama-3.1-nemotron-70b-instruct",
+          messages: nvidiaMessages,
+          max_tokens: 2500,
+          temperature: 0.7,
+          top_p: 0.9,
+        }),
+      }
+    );
+
+    if (!nvidiaResponse.ok) {
+      const errText = await nvidiaResponse.text();
       return new Response(
-        JSON.stringify({ error: "Claude API error", details: errText }),
+        JSON.stringify({ error: "NVIDIA API error", details: errText }),
         { status: 502, headers: { ...corsHeaders, "Content-Type": "application/json" } }
       );
     }
 
-    const claudeData = await claudeResponse.json();
-    const rawReply = claudeData.content?.[0]?.text ?? "No response generated.";
+    const nvidiaData = await nvidiaResponse.json();
+    const rawReply = nvidiaData.choices?.[0]?.message?.content ?? "No response generated.";
 
     // Parse memory commands, agent commands, and voice commands from reply
     const replyLines: string[] = [];
